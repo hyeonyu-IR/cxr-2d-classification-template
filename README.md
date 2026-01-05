@@ -160,11 +160,3 @@ Common next steps:
 - integrate experiment tracking (e.g., MLflow).
 The modular structure is designed to support these changes cleanly.
 
-License / usage
-This code is intended for research and educational use.
-Please validate thoroughly before any clinical or operational deployment.
-
-Contact / notes
-This repository was developed as part of an academic exploration of
-AI workflows in medical imaging, with emphasis on rigor, interpretability,
-and reproducibility.
