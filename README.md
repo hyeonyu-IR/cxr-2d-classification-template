@@ -11,7 +11,7 @@ A reproducible, modular baseline framework for **2D medical image classification
 This repository was developed as a clean research template and can be reused for other radiology classification tasks (CXR, radiographs, pathology slides, etc.).
 
 ---
-
+```
 ## Project structure
 
 medimg_baseline_cls/
@@ -44,8 +44,6 @@ medimg_baseline_cls/
 ├── FP/
 └── FN/
 
----
-
 ## Dataset assumptions
 
 This project currently assumes the **Kaggle Chest X-ray (Pneumonia)** directory structure:
@@ -59,7 +57,7 @@ chest_xray/
 │ └── PNEUMONIA/
 └── val/ # optional; can be rebuilt from train
 
-
+```
 Images may be grayscale or RGB.  
 Grayscale images are automatically converted to **3-channel** format.
 
@@ -74,7 +72,7 @@ conda activate medimg
 pip install torch torchvision torchaudio
 pip install monai
 pip install numpy pandas scikit-learn matplotlib tqdm pillow
-
+```
 
 GPU (CUDA) is automatically detected if available.
 
@@ -110,12 +108,12 @@ This notebook:
 - reports TEST confusion matrices and metrics,
 - identifies hard false positives / false negatives,
 - generates and saves Grad-CAM visual explanations.
-
+```
 Grad-CAM outputs are saved to:
 outputs/runs/<run_id>/gradcam/
 ├── FP/
 └── FN/
-
+```
 Each image contains:
 - original image,
 - Grad-CAM heatmap,
