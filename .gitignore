@@ -1,0 +1,29 @@
+# data and outputs
+data/
+datasets/
+outputs/
+runs/
+logs/
+
+# model weights
+*.pth
+*.pt
+*.ckpt
+
+# python cache
+__pycache__/
+*.pyc
+
+# notebooks
+.ipynb_checkpoints/
+
+# conda / venv
+.venv/
+env/
+
+# system
+.DS_Store
+Thumbs.db
+
+# secrets
+.env
