@@ -31,19 +31,13 @@ medimg_baseline_cls/
 │ ├── 01_train.ipynb # Thin training driver
 │ └── 02_eval_gradcam.ipynb # Evaluation + Grad-CAM driver
 │
-└── outputs/
-└── runs/
-└── <project>_<timestamp>/
-├── best.pt
-├── history.csv
-├── config.json
-├── env_report.json
-├── val_summary.json
-├── test_summary.json
-├── eval_summary.json
-└── gradcam/
-├── FP/
-└── FN/
+├── scripts/
+│ ├── 01_train.py
+│ └── 02_eval_gradcam.py
+|
+├── outputs/
+│ ├── runs/
+│ |   └── run_id/
 ```
 
 
