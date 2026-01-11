@@ -177,10 +177,12 @@ python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medim
   ```
   python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
   ```
+  ---
 This will also write:
 - outputs/runs/<timestamped_run>/...
 - outputs/runs/_latest_run.json (so eval can use --run latest)
 
+  ---
 ### Use example for scripts/02_eval_gradcam.py
 #### Evaluate + Grad-CAM (latest run)
 ```
