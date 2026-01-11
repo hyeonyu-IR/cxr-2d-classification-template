@@ -167,37 +167,16 @@ AI workflows in medical imaging, with emphasis on rigor, interpretability,
 and reproducibility.
 
 ---
-### Use example for scripts/01_train.py
-#### Train: required data-root. type below in the root directory of the project
-```
-conda activate medimg
-python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
-```
-- optional overrides:
-  ```
-  python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
-  ```
+## Scripts (recommended for reproducible runs)
+Script-based workflows are provided for non-interactive, repeatable experiments.
+- Training: `scripts/01_train.py`
+- Evaluation and Grad-CAM: `scripts/02_eval_gradcam.py`
 
-This will also write:
-- outputs/runs/<timestamped_run>/...
-- outputs/runs/_latest_run.json (so eval can use --run latest)
-
----
-### Use example for scripts/02_eval_gradcam.py
-#### Evaluate + Grad-CAM (latest run)
+Each script exposes a CLI interface:
+```bash
+python scripts/01_train.py --help
+python scripts/02_eval_gradcam.py --help
 ```
-python scripts/02_eval_gradcam.py --run latest
-```
-- For specific run 'Evaluate + Grad-CAM'
-```
-python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
-```
-- optional example:
-  ```
-  python scripts/01_train.py --data-root "C:\...\chest_xray" --arch resnet18 --batch-size 32 --max-epochs 10
-  ```
-Outputs:
-- <run_dir>/gradcam/FP/
-- <run_dir>/gradcam/FN/
-- <run_dir>/eval_summary.json (enabled by default)
-
+Detailed usage examples, threshold strategies, and output descriptions are
+documented in:
+- ```docs/USAGE.md```
