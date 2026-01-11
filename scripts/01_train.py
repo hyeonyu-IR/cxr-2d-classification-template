@@ -4,6 +4,11 @@ scripts/01_train.py
 
 CLI entrypoint for training (medimg_baseline_cls).
 
+New in this version
+1) Persists model architecture (arch) into the run's config.json (post-hoc update).
+   - This avoids modifying src/config.py while still recording arch for reproducibility.
+   - Downstream loaders should tolerate extra keys (02_eval_gradcam.py does).
+
 Key features
 - Robust project-root resolution (can run from any working directory)
 - CLI overrides for dataset path and core hyperparameters
@@ -14,6 +19,7 @@ Key features
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -34,6 +40,30 @@ def _parse_image_size(s: str) -> Tuple[int, int]:
         return int(parts[0]), int(parts[1])
     except ValueError as e:
         raise argparse.ArgumentTypeError("Image size must be two integers.") from e
+
+
+def _update_run_config_json(run_dir: Path, updates: dict) -> None:
+    """Update <run_dir>/config.json in-place with extra metadata (e.g., arch).
+
+    This is intentionally post-hoc so we do not need to modify Config schema.
+    """
+    cfg_path = run_dir / "config.json"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Expected config.json not found: {cfg_path}")
+
+    with cfg_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    changed = False
+    for k, v in updates.items():
+        if data.get(k) != v:
+            data[k] = v
+            changed = True
+
+    if changed:
+        with cfg_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print(f"Updated run config: {cfg_path} (added/updated keys: {list(updates.keys())})")
 
 
 def main() -> None:
@@ -109,7 +139,6 @@ def main() -> None:
     print("Config:", cfg)
     print("Environment:", env_report())
 
-    # Data
     ds = build_datasets(
         root_dir=cfg.data_root,
         class_names=cfg.class_names,
@@ -128,7 +157,7 @@ def main() -> None:
         train_ds=ds["train_ds"],
         val_ds=ds["val_ds"],
         test_ds=ds["test_ds"],
-        train_items=ds["train_items"],  # IMPORTANT: required for weighted sampler
+        train_items=ds["train_items"],
         class_names=cfg.class_names,
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
@@ -136,29 +165,15 @@ def main() -> None:
         use_weighted_sampler=cfg.use_weighted_sampler,
     )
 
-    # Sanity batch
-    b = next(iter(loaders["train_loader"]))
-    print("Batch image shape:", getattr(b["image"], "shape", None))
-    try:
-        import numpy as np
-        labs = b["label"].detach().cpu().numpy()
-        print("Batch label counts:", {int(k): int((labs == k).sum()) for k in np.unique(labs)})
-    except Exception:
-        pass
-
-    # Model
     arch = args.arch
     model = build_model(arch=arch, num_classes=len(cfg.class_names), pretrained=True, device=cfg.device)
 
-    # Freeze backbone for head-only stage
     freeze_backbone(model, head_prefixes=get_head_prefixes(arch))
     print("Trainable tensors:", sum(p.requires_grad for p in model.parameters()), "/", len(list(model.parameters())))
 
-    # (Optional) Grad-CAM target layer sanity
     target_layer = get_gradcam_target_layer(model, arch)
     print("Grad-CAM target layer:", target_layer)
 
-    # Train
     result = run_training(
         cfg=cfg,
         model=model,
@@ -167,18 +182,20 @@ def main() -> None:
         test_loader=loaders["test_loader"],
     )
 
-    print("Run saved to:", result["run_dir"])
+    run_dir = Path(result["run_dir"]).resolve()
+    print("Run saved to:", run_dir)
     print("Best checkpoint:", result["best_ckpt_path"])
     print("VAL summary:", result["val_summary"])
     print("TEST summary:", result["test_summary"])
 
-    # Save env report into run directory
-    save_json(env_report(), str(Path(result["run_dir"]) / "env_report.json"))
+    save_json(env_report(), str(run_dir / "env_report.json"))
 
-    # Save a pointer to the latest run for downstream scripts/notebooks
+    # Persist arch into config.json for this run
+    _update_run_config_json(run_dir, {"arch": arch})
+
     latest_path = Path(cfg.output_root) / "runs" / "_latest_run.json"
     save_json(
-        {"run_dir": result["run_dir"], "best_ckpt_path": result["best_ckpt_path"]},
+        {"run_dir": str(run_dir), "best_ckpt_path": result["best_ckpt_path"], "arch": arch},
         str(latest_path),
     )
     print("Wrote latest run pointer to:", latest_path)

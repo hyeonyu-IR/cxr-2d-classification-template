@@ -2,21 +2,23 @@
 """
 scripts/02_eval_gradcam.py
 
-CLI entrypoint for:
-- Loading the most recent (or specified) run directory
-- Rebuilding datasets/loaders
-- Evaluating VAL/TEST and selecting thresholds on VAL
-- Finding hard FP/FN errors
-- Exporting Grad-CAM panels under <run_dir>/gradcam/
+CLI entrypoint for evaluation + Grad-CAM.
 
-Aligned with your existing codebase:
-- src.eval: eval_split, metrics_at_threshold, pick_threshold_max_f1, pick_threshold_target_sens, find_errors_binary
-- src.interpret: GradCAM, save_gradcam_batch
+New in this version
+2) --threshold-strategy {maxf1, targetsens}
+   - Controls which threshold is used for hard-error mining and Grad-CAM export.
+   - Both thresholds are still computed and reported.
+
+3) Saves a CSV of hard errors under <run_dir>/errors_<strategy>.csv
+   - Includes paths, scores, labels, predictions, and error type.
+
+Also tolerates extra keys in config.json (e.g., arch) by filtering to Config fields.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 from typing import Optional
@@ -73,9 +75,46 @@ def resolve_ckpt_path(run_dir: Path, runs_root: Path, ckpt_arg: Optional[str]) -
     raise FileNotFoundError("Could not resolve checkpoint. Provide --ckpt or ensure best.pt exists in the run directory.")
 
 
+def load_config_lenient(run_dir: Path):
+    """Load Config from config.json but tolerate extra keys by filtering."""
+    from src.utils import load_json
+    from src.config import Config
+
+    raw = load_json(str(run_dir / "config.json"))
+
+    if hasattr(Config, "__dataclass_fields__"):
+        allowed = set(Config.__dataclass_fields__.keys())
+        filtered = {k: v for k, v in raw.items() if k in allowed}
+    else:
+        filtered = raw
+
+    cfg = Config(**filtered)
+    cfg.run_dir = str(run_dir)
+    extras = {k: v for k, v in raw.items() if k not in filtered}
+    return cfg, raw, extras
+
+
+def write_errors_csv(out_csv: Path, items: list, y_true, y_score, y_pred, idx_list: list, error_type: str, threshold: float) -> None:
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    header = ["idx", "error_type", "threshold", "path", "y_true", "y_score", "y_pred"]
+
+    # overwrite each run
+    mode = "a"
+    if not out_csv.exists():
+        mode = "w"
+
+    with out_csv.open(mode, newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if mode == "w":
+            writer.writerow(header)
+        for i in idx_list:
+            path = items[i].get("image") if isinstance(items[i], dict) else str(items[i])
+            writer.writerow([i, error_type, threshold, path, int(y_true[i]), float(y_score[i]), int(y_pred[i])])
+
+
 def main() -> None:
     from src.utils import load_json, save_json
-    from src.config import Config, seed_everything
+    from src.config import seed_everything
     from src.data import build_datasets, build_loaders
     from src.models import build_model, get_gradcam_target_layer
     from src.eval import (
@@ -87,22 +126,29 @@ def main() -> None:
     )
     from src.interpret import GradCAM, save_gradcam_batch
 
+    import numpy as np
     import torch
     import torch.nn as nn
 
     parser = argparse.ArgumentParser(description="Evaluate a run and export Grad-CAM panels.")
     parser.add_argument("--run", type=str, default="latest", help='Run directory path, or "latest".')
     parser.add_argument("--runs-root", type=str, default=str(Path("outputs") / "runs"), help="Runs root containing _latest_run.json.")
-    parser.add_argument("--arch", type=str, default="resnet18", help="Architecture used during training (must match checkpoint).")
+
+    parser.add_argument("--arch", type=str, default=None, help="Architecture used during training. If omitted, tries config.json then _latest_run.json then defaults to resnet18.")
     parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint filename/path. If relative, interpreted under run_dir.")
     parser.add_argument("--device", type=str, default=None, help='Override cfg.device (e.g., "cuda" or "cpu").')
 
     parser.add_argument("--target-sens", type=float, default=0.95, help="Target sensitivity for threshold selection on VAL.")
     parser.add_argument("--topk", type=int, default=10, help="Top-K hard errors to export (FP and FN indices).")
+
+    parser.add_argument("--threshold-strategy", type=str, choices=["maxf1", "targetsens"], default="maxf1",
+                        help="Threshold used for hard-error mining + Grad-CAM export.")
     parser.add_argument("--alpha", type=float, default=None, help="Override cfg.gradcam_alpha.")
     parser.add_argument("--out-subdir", type=str, default="gradcam", help="Output subdirectory under run_dir for Grad-CAM panels.")
     parser.add_argument("--save-summary", action="store_true", default=True)
     parser.add_argument("--no-save-summary", dest="save_summary", action="store_false")
+    parser.add_argument("--save-errors-csv", action="store_true", default=True)
+    parser.add_argument("--no-save-errors-csv", dest="save_errors_csv", action="store_false")
 
     args = parser.parse_args()
 
@@ -111,9 +157,16 @@ def main() -> None:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
 
-    cfg_dict = load_json(str(run_dir / "config.json"))
-    cfg = Config(**cfg_dict)
-    cfg.run_dir = str(run_dir)
+    cfg, cfg_raw, extras = load_config_lenient(run_dir)
+
+    arch = args.arch or cfg_raw.get("arch")
+    if arch is None:
+        meta_path = runs_root / "_latest_run.json"
+        if meta_path.exists():
+            meta = load_json(str(meta_path))
+            arch = meta.get("arch")
+    if arch is None:
+        arch = "resnet18"
 
     if args.device is not None:
         cfg.device = args.device
@@ -127,6 +180,7 @@ def main() -> None:
     print("Project root:", ROOT)
     print("Using run_dir:", run_dir)
     print("Using checkpoint:", ckpt_path)
+    print("Using arch:", arch)
     print(cfg)
 
     ds = build_datasets(
@@ -154,11 +208,18 @@ def main() -> None:
     test_loader = loaders["test_loader"]
     test_items = ds["test_items"]
 
-    arch = args.arch
     model = build_model(arch=arch, num_classes=len(cfg.class_names), pretrained=False, device=cfg.device)
 
-    state = torch.load(str(ckpt_path), map_location="cpu")
-    model.load_state_dict(state)
+    # Safer load when possible
+    try:
+        state = torch.load(str(ckpt_path), map_location="cpu", weights_only=True)
+    except TypeError:
+        state = torch.load(str(ckpt_path), map_location="cpu")
+
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+
+    model.load_state_dict(state, strict=True)
     model.to(cfg.device)
     model.eval()
 
@@ -198,27 +259,31 @@ def main() -> None:
     print({k: v for k, v in m_test_f1.items() if k != "confusion_matrix"})
     print(f"\n[TEST @ TargetSens thr={thr_sens:.4f} (target sens {args.target_sens})]")
     print({k: v for k, v in m_test_sens.items() if k != "confusion_matrix"})
-    print("\nConfusion matrix format: [[TN, FP],[FN, TP]]")
-    print("\nTEST confusion @ thr_f1:\n", m_test_f1["confusion_matrix"])
-    print("\nTEST confusion @ thr_sens:\n", m_test_sens["confusion_matrix"])
+
+    thr_use = thr_f1 if args.threshold_strategy == "maxf1" else thr_sens
+    print(f"\n=== Using threshold strategy: {args.threshold_strategy} (thr={thr_use:.4f}) ===")
 
     errs = find_errors_binary(
         items=test_items,
         y_score=test_out["y_score"],
         pos_idx=test_out["pos_idx"],
-        thr=thr_f1,
+        thr=thr_use,
         topk=args.topk,
     )
     fp_idx = errs["fp_idx"]
     fn_idx = errs["fn_idx"]
 
-    print("\n=== Hard errors on TEST (Max-F1 threshold) ===")
+    y_true = np.asarray(test_out["y_true"])
+    y_score = np.asarray(test_out["y_score"])
+    y_pred = (y_score >= thr_use).astype(int)
+
+    print("\n=== Hard errors on TEST ===")
     print("Top false positives:")
     for i in fp_idx:
-        print(f"  score={test_out['y_score'][i]:.3f} | path={test_items[i]['image']}")
+        print(f"  score={y_score[i]:.3f} | path={test_items[i]['image']}")
     print("\nTop false negatives:")
     for i in fn_idx:
-        print(f"  score={test_out['y_score'][i]:.3f} | path={test_items[i]['image']}")
+        print(f"  score={y_score[i]:.3f} | path={test_items[i]['image']}")
 
     gradcam = GradCAM(model, target_layer)
     out_dir = Path(run_dir) / args.out_subdir
@@ -249,8 +314,19 @@ def main() -> None:
     print("Saved FP panels:", len(records_fp), "to", out_dir / "FP")
     print("Saved FN panels:", len(records_fn), "to", out_dir / "FN")
 
+    if args.save_errors_csv:
+        out_csv = Path(run_dir) / f"errors_{args.threshold_strategy}.csv"
+        if out_csv.exists():
+            out_csv.unlink()
+        write_errors_csv(out_csv, test_items, y_true, y_score, y_pred, fp_idx, "FP", float(thr_use))
+        write_errors_csv(out_csv, test_items, y_true, y_score, y_pred, fn_idx, "FN", float(thr_use))
+        print("Saved:", out_csv)
+
     if args.save_summary:
         summary = {
+            "arch": arch,
+            "threshold_strategy": args.threshold_strategy,
+            "threshold_used": float(thr_use),
             "val": {
                 "loss": float(val_out["loss"]),
                 "acc": float(val_out["acc"]),
