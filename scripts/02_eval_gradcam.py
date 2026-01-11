@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 """
-02_eval_gradcam.py
+scripts/02_eval_gradcam.py
 
-CLI entrypoint for evaluating a trained checkpoint and producing Grad-CAM panels.
+CLI entrypoint for:
+- Loading the most recent (or specified) run directory
+- Rebuilding datasets/loaders
+- Evaluating VAL/TEST and selecting thresholds on VAL
+- Finding hard FP/FN errors
+- Exporting Grad-CAM panels under <run_dir>/gradcam/
 
-Design goals
-- Portable: resolves project root from script location; can be run from any working directory.
-- Reproducible: resolves latest run via outputs/runs/_latest_run.json or accepts an explicit run directory.
-- Script-friendly: argparse + main().
+Aligned with your existing codebase:
+- src.eval: eval_split, metrics_at_threshold, pick_threshold_max_f1, pick_threshold_target_sens, find_errors_binary
+- src.interpret: GradCAM, save_gradcam_batch
 """
 
 from __future__ import annotations
@@ -15,32 +19,20 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
-# Resolve project root robustly (scripts/ -> repo root)
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 def resolve_run_dir(run_arg: str, runs_root: Path) -> Path:
-    """
-    Resolve run directory from:
-      - "latest": use outputs/runs/_latest_run.json pointer
-      - explicit path: outputs/runs/<run_name> or any valid path
-    """
     if run_arg.lower() == "latest":
         meta_path = runs_root / "_latest_run.json"
         if not meta_path.exists():
-            raise FileNotFoundError(
-                f"Latest-run pointer not found: {meta_path}. "
-                "Run training first, or pass --run <RUN_DIR>."
-            )
+            raise FileNotFoundError(f"Latest-run pointer not found: {meta_path}")
         from src.utils import load_json
         meta = load_json(str(meta_path))
-        if "run_dir" not in meta:
-            raise KeyError(f"'run_dir' key not found in {meta_path}. Keys: {list(meta.keys())}")
-
         run_dir = Path(meta["run_dir"])
         if not run_dir.is_absolute():
             run_dir = (Path.cwd() / run_dir).resolve()
@@ -52,73 +44,65 @@ def resolve_run_dir(run_arg: str, runs_root: Path) -> Path:
     return run_dir.resolve()
 
 
-def load_config_from_run(run_dir: Path):
+def resolve_ckpt_path(run_dir: Path, runs_root: Path, ckpt_arg: Optional[str]) -> Path:
     from src.utils import load_json
-    from src.config import Config
 
-    cfg_path = run_dir / "config.json"
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"config.json not found in run directory: {cfg_path}")
+    if ckpt_arg:
+        p = Path(ckpt_arg)
+        if not p.is_absolute():
+            p = (run_dir / p).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"--ckpt not found: {p}")
+        return p
 
-    cfg_dict = load_json(str(cfg_path))
-    cfg = Config(**cfg_dict)
-    cfg.run_dir = str(run_dir)  # optional convenience
-    return cfg
+    meta_path = runs_root / "_latest_run.json"
+    if meta_path.exists():
+        meta = load_json(str(meta_path))
+        best = meta.get("best_ckpt_path")
+        if best:
+            p = Path(best)
+            if not p.is_absolute():
+                p = (Path.cwd() / p).resolve()
+            if p.exists():
+                return p
+
+    p = (run_dir / "best.pt").resolve()
+    if p.exists():
+        return p
+
+    raise FileNotFoundError("Could not resolve checkpoint. Provide --ckpt or ensure best.pt exists in the run directory.")
 
 
 def main() -> None:
-    from src.config import seed_everything
-    from src.utils import load_json
+    from src.utils import load_json, save_json
+    from src.config import Config, seed_everything
     from src.data import build_datasets, build_loaders
     from src.models import build_model, get_gradcam_target_layer
-    from src.eval import eval_split, find_best_threshold, compute_confusion
-    from src.gradcam import make_gradcam, save_gradcam_batch
+    from src.eval import (
+        eval_split,
+        metrics_at_threshold,
+        pick_threshold_max_f1,
+        pick_threshold_target_sens,
+        find_errors_binary,
+    )
+    from src.interpret import GradCAM, save_gradcam_batch
 
-    parser = argparse.ArgumentParser(description="Evaluate a trained run and generate Grad-CAM panels.")
-    parser.add_argument(
-        "--run",
-        type=str,
-        default="latest",
-        help='Run directory path, or "latest" to use outputs/runs/_latest_run.json',
-    )
-    parser.add_argument(
-        "--runs-root",
-        type=str,
-        default=str(Path("outputs") / "runs"),
-        help="Root directory containing run folders and _latest_run.json",
-    )
-    parser.add_argument(
-        "--ckpt",
-        type=str,
-        default=None,
-        help="Checkpoint filename inside the run directory (e.g., best.pt). If omitted, uses pointer best_ckpt_path if available.",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default=None,
-        help='Override cfg.device (e.g., "cuda" or "cpu"). If omitted, uses cfg.device.',
-    )
-    parser.add_argument(
-        "--arch",
-        type=str,
-        default=None,
-        help="Override architecture for model construction if not stored elsewhere. If omitted, uses the script's default or your run's expectation.",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional limit on number of cases/images to process for Grad-CAM (debugging).",
-    )
-    parser.add_argument("--n-fp", type=int, default=10, help="Number of false positives to export as Grad-CAM panels.")
-    parser.add_argument("--n-fn", type=int, default=10, help="Number of false negatives to export as Grad-CAM panels.")
-    parser.add_argument(
-        "--out-subdir",
-        type=str,
-        default="gradcam",
-        help="Subdirectory under run_dir to write Grad-CAM outputs.",
-    )
+    import torch
+    import torch.nn as nn
+
+    parser = argparse.ArgumentParser(description="Evaluate a run and export Grad-CAM panels.")
+    parser.add_argument("--run", type=str, default="latest", help='Run directory path, or "latest".')
+    parser.add_argument("--runs-root", type=str, default=str(Path("outputs") / "runs"), help="Runs root containing _latest_run.json.")
+    parser.add_argument("--arch", type=str, default="resnet18", help="Architecture used during training (must match checkpoint).")
+    parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint filename/path. If relative, interpreted under run_dir.")
+    parser.add_argument("--device", type=str, default=None, help='Override cfg.device (e.g., "cuda" or "cpu").')
+
+    parser.add_argument("--target-sens", type=float, default=0.95, help="Target sensitivity for threshold selection on VAL.")
+    parser.add_argument("--topk", type=int, default=10, help="Top-K hard errors to export (FP and FN indices).")
+    parser.add_argument("--alpha", type=float, default=None, help="Override cfg.gradcam_alpha.")
+    parser.add_argument("--out-subdir", type=str, default="gradcam", help="Output subdirectory under run_dir for Grad-CAM panels.")
+    parser.add_argument("--save-summary", action="store_true", default=True)
+    parser.add_argument("--no-save-summary", dest="save_summary", action="store_false")
 
     args = parser.parse_args()
 
@@ -127,97 +111,61 @@ def main() -> None:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
 
-    cfg = load_config_from_run(run_dir)
+    cfg_dict = load_json(str(run_dir / "config.json"))
+    cfg = Config(**cfg_dict)
+    cfg.run_dir = str(run_dir)
 
-    # Device override
     if args.device is not None:
         cfg.device = args.device
+    if args.alpha is not None:
+        cfg.gradcam_alpha = float(args.alpha)
 
     seed_everything(cfg.seed, cfg.deterministic)
 
-    # Resolve checkpoint path
-    best_ckpt_path: Optional[Path] = None
-
-    # Prefer explicit --ckpt (relative to run_dir if not absolute)
-    if args.ckpt:
-        ckpt_path = Path(args.ckpt)
-        if not ckpt_path.is_absolute():
-            ckpt_path = (run_dir / ckpt_path).resolve()
-        best_ckpt_path = ckpt_path
-    else:
-        # Try to use latest pointer if available
-        meta_path = runs_root / "_latest_run.json"
-        if meta_path.exists():
-            meta = load_json(str(meta_path))
-            if "best_ckpt_path" in meta and meta["best_ckpt_path"]:
-                ckpt_path = Path(meta["best_ckpt_path"])
-                if not ckpt_path.is_absolute():
-                    ckpt_path = (Path.cwd() / ckpt_path).resolve()
-                best_ckpt_path = ckpt_path
-
-    if best_ckpt_path is None or not best_ckpt_path.exists():
-        # Fallback: common names inside run_dir
-        candidates = [
-            run_dir / "best.pt",
-            run_dir / "best.pth",
-            run_dir / "model_best.pt",
-            run_dir / "checkpoints" / "best.pt",
-        ]
-        best_ckpt_path = next((p for p in candidates if p.exists()), None)
-
-    if best_ckpt_path is None or not best_ckpt_path.exists():
-        raise FileNotFoundError(
-            "Could not resolve checkpoint. Provide --ckpt, or ensure _latest_run.json has best_ckpt_path, "
-            "or place a best checkpoint under the run directory."
-        )
+    ckpt_path = resolve_ckpt_path(run_dir, runs_root, args.ckpt)
 
     print("Project root:", ROOT)
     print("Using run_dir:", run_dir)
-    print("Using checkpoint:", best_ckpt_path)
+    print("Using checkpoint:", ckpt_path)
     print(cfg)
 
-    # Data
-    datasets = build_datasets(
+    ds = build_datasets(
         root_dir=cfg.data_root,
         class_names=cfg.class_names,
         image_size=cfg.image_size,
         rebuild_balanced_val=cfg.rebuild_balanced_val,
         val_n_per_class=cfg.val_n_per_class,
+        seed=cfg.seed,
     )
 
     loaders = build_loaders(
-        train_ds=datasets["train_ds"],
-        val_ds=datasets["val_ds"],
-        test_ds=datasets["test_ds"],
+        train_ds=ds["train_ds"],
+        val_ds=ds["val_ds"],
+        test_ds=ds["test_ds"],
+        train_items=ds["train_items"],
         class_names=cfg.class_names,
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
-        use_weighted_sampler=False,  # not needed for eval
+        use_weighted_sampler=False,
     )
 
     val_loader = loaders["val_loader"]
     test_loader = loaders["test_loader"]
+    test_items = ds["test_items"]
 
-    # Build model
-    # NOTE: your training script likely fixed arch (e.g., resnet18). If you store arch in config later,
-    # you can remove --arch override and load it from cfg.
-    arch = args.arch or "resnet18"
+    arch = args.arch
     model = build_model(arch=arch, num_classes=len(cfg.class_names), pretrained=False, device=cfg.device)
 
-    # Load weights
-    import torch
-    state = torch.load(str(best_ckpt_path), map_location=cfg.device)
-    if isinstance(state, dict) and "state_dict" in state:
-        state = state["state_dict"]
-    model.load_state_dict(state, strict=False)
+    state = torch.load(str(ckpt_path), map_location="cpu")
+    model.load_state_dict(state)
+    model.to(cfg.device)
     model.eval()
 
-    # Criterion for eval (if required by your eval functions)
-    import torch.nn as nn
     criterion = nn.CrossEntropyLoss()
+    target_layer = get_gradcam_target_layer(model, arch)
+    print("Grad-CAM target layer:", target_layer)
 
-    # Evaluate
     val_out = eval_split(
         model=model, loader=val_loader, device=cfg.device, criterion=criterion,
         class_names=cfg.class_names, pos_class_name=cfg.pos_class_name
@@ -231,82 +179,97 @@ def main() -> None:
     print(f"VAL  | loss={val_out['loss']:.4f} acc={val_out['acc']:.4f} AP={val_out.get('ap', float('nan')):.4f}")
     print(f"TEST | loss={test_out['loss']:.4f} acc={test_out['acc']:.4f} AP={test_out.get('ap', float('nan')):.4f}")
 
-    # Thresholds from VAL
-    best_thr = find_best_threshold(val_out["y_true"], val_out["y_prob"])
-    print("Best threshold (VAL):", best_thr)
+    thr_f1, best_f1 = pick_threshold_max_f1(val_out["y_true"], val_out["y_score"])
+    m_val_f1 = metrics_at_threshold(val_out["y_true"], val_out["y_score"], thr_f1)
 
-    # Confusion on TEST using best_thr
-    cm = compute_confusion(test_out["y_true"], test_out["y_prob"], thr=best_thr)
-    print("Confusion matrix (TEST):")
-    print(cm)
+    thr_sens, m_val_sens = pick_threshold_target_sens(val_out["y_true"], val_out["y_score"], target_sens=args.target_sens)
 
-    # Grad-CAM setup
-    target_layer = get_gradcam_target_layer(model, arch)
-    gradcam = make_gradcam(model=model, target_layer=target_layer, alpha=cfg.gradcam_alpha)
+    print("\n=== Thresholds selected on VAL ===")
+    print(f"Max-F1 threshold: {thr_f1:.4f} (F1={best_f1:.3f})")
+    print("VAL metrics @ thr_f1:", {k: v for k, v in m_val_f1.items() if k != "confusion_matrix"})
+    print(f"\nTarget-sensitivity threshold: {thr_sens:.4f} (target sens >= {args.target_sens})")
+    print("VAL metrics @ thr_sens:", {k: v for k, v in m_val_sens.items() if k != "confusion_matrix"})
 
-    # Identify FP/FN indices (assuming pos class is encoded as 1)
-    y_true = test_out["y_true"]
-    y_prob = test_out["y_prob"]
-    y_pred = (y_prob >= best_thr).astype(int)
+    m_test_f1 = metrics_at_threshold(test_out["y_true"], test_out["y_score"], thr_f1)
+    m_test_sens = metrics_at_threshold(test_out["y_true"], test_out["y_score"], thr_sens)
 
-    fp_idx = [i for i, (yt, yp) in enumerate(zip(y_true, y_pred)) if yt == 0 and yp == 1]
-    fn_idx = [i for i, (yt, yp) in enumerate(zip(y_true, y_pred)) if yt == 1 and yp == 0]
+    print("\n=== TEST metrics using thresholds chosen on VAL ===")
+    print(f"\n[TEST @ Max-F1 thr={thr_f1:.4f}]")
+    print({k: v for k, v in m_test_f1.items() if k != "confusion_matrix"})
+    print(f"\n[TEST @ TargetSens thr={thr_sens:.4f} (target sens {args.target_sens})]")
+    print({k: v for k, v in m_test_sens.items() if k != "confusion_matrix"})
+    print("\nConfusion matrix format: [[TN, FP],[FN, TP]]")
+    print("\nTEST confusion @ thr_f1:\n", m_test_f1["confusion_matrix"])
+    print("\nTEST confusion @ thr_sens:\n", m_test_sens["confusion_matrix"])
 
-    # Limit for debugging (applies to FP/FN selection)
-    n_fp = min(args.n_fp, len(fp_idx))
-    n_fn = min(args.n_fn, len(fn_idx))
+    errs = find_errors_binary(
+        items=test_items,
+        y_score=test_out["y_score"],
+        pos_idx=test_out["pos_idx"],
+        thr=thr_f1,
+        topk=args.topk,
+    )
+    fp_idx = errs["fp_idx"]
+    fn_idx = errs["fn_idx"]
 
-    # Extract file paths for selected items. Your eval_split/test_out must provide "items" or similar.
-    # In your original notebook-derived script, this was sourced from datasets or cached item dicts.
-    # We'll reproduce the prior behavior: datasets["test_items"] is expected to be available.
-    test_items = datasets.get("test_items", None)
-    if test_items is None:
-        # Common fallback: dataset object may have .items
-        test_ds = datasets["test_ds"]
-        test_items = getattr(test_ds, "items", None)
+    print("\n=== Hard errors on TEST (Max-F1 threshold) ===")
+    print("Top false positives:")
+    for i in fp_idx:
+        print(f"  score={test_out['y_score'][i]:.3f} | path={test_items[i]['image']}")
+    print("\nTop false negatives:")
+    for i in fn_idx:
+        print(f"  score={test_out['y_score'][i]:.3f} | path={test_items[i]['image']}")
 
-    if test_items is None:
-        raise RuntimeError(
-            "Cannot find test_items to locate image file paths for Grad-CAM export. "
-            "Ensure build_datasets returns 'test_items' or that test_ds has an '.items' attribute."
-        )
-
-    fp_paths = [test_items[i]["image"] for i in fp_idx[:n_fp]]
-    fn_paths = [test_items[i]["image"] for i in fn_idx[:n_fn]]
-
+    gradcam = GradCAM(model, target_layer)
     out_dir = Path(run_dir) / args.out_subdir
-    (out_dir / "FP").mkdir(parents=True, exist_ok=True)
-    (out_dir / "FN").mkdir(parents=True, exist_ok=True)
+    fp_paths = [test_items[i]["image"] for i in fp_idx]
+    fn_paths = [test_items[i]["image"] for i in fn_idx]
 
     records_fp = save_gradcam_batch(
         model=model,
         gradcam=gradcam,
-        image_paths=fp_paths,
+        paths=fp_paths,
         out_dir=str(out_dir / "FP"),
         class_names=cfg.class_names,
         device=cfg.device,
         image_size=cfg.image_size,
-        limit=args.limit,
-    ) if "limit" in save_gradcam_batch.__code__.co_varnames else save_gradcam_batch(
-        model, gradcam, fp_paths, str(out_dir / "FP"), cfg.class_names, cfg.device, cfg.image_size
+        alpha=cfg.gradcam_alpha,
     )
-
     records_fn = save_gradcam_batch(
         model=model,
         gradcam=gradcam,
-        image_paths=fn_paths,
+        paths=fn_paths,
         out_dir=str(out_dir / "FN"),
         class_names=cfg.class_names,
         device=cfg.device,
         image_size=cfg.image_size,
-        limit=args.limit,
-    ) if "limit" in save_gradcam_batch.__code__.co_varnames else save_gradcam_batch(
-        model, gradcam, fn_paths, str(out_dir / "FN"), cfg.class_names, cfg.device, cfg.image_size
+        alpha=cfg.gradcam_alpha,
     )
 
-    print("Saved FP Grad-CAM panels:", len(records_fp))
-    print("Saved FN Grad-CAM panels:", len(records_fn))
-    print("Grad-CAM output directory:", out_dir)
+    print("Saved FP panels:", len(records_fp), "to", out_dir / "FP")
+    print("Saved FN panels:", len(records_fn), "to", out_dir / "FN")
+
+    if args.save_summary:
+        summary = {
+            "val": {
+                "loss": float(val_out["loss"]),
+                "acc": float(val_out["acc"]),
+                "ap": float(val_out.get("ap", float("nan"))),
+                "thr_f1": float(thr_f1),
+                "thr_sens": float(thr_sens),
+            },
+            "test": {
+                "loss": float(test_out["loss"]),
+                "acc": float(test_out["acc"]),
+                "ap": float(test_out.get("ap", float("nan"))),
+                "metrics_at_thr_f1": {k: v for k, v in m_test_f1.items() if k != "confusion_matrix"},
+                "metrics_at_thr_sens": {k: v for k, v in m_test_sens.items() if k != "confusion_matrix"},
+                "cm_thr_f1": m_test_f1["confusion_matrix"].tolist(),
+                "cm_thr_sens": m_test_sens["confusion_matrix"].tolist(),
+            },
+        }
+        save_json(summary, str(Path(run_dir) / "eval_summary.json"))
+        print("Saved:", Path(run_dir) / "eval_summary.json")
 
 
 if __name__ == "__main__":

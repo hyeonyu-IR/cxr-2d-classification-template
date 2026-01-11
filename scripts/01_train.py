@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """
-01_train.py
+scripts/01_train.py
 
-CLI entrypoint for training a 2D chest X-ray classifier using the medimg_baseline_cls template.
+CLI entrypoint for training (medimg_baseline_cls).
 
-Design goals
-- Reproducible: config is saved into a run directory; a "_latest_run.json" pointer is written for downstream evaluation.
-- Portable: no machine-specific hard-coded paths; project root is resolved from this script location.
-- Script-friendly: all execution is behind a main() entrypoint with argparse.
+Key features
+- Robust project-root resolution (can run from any working directory)
+- CLI overrides for dataset path and core hyperparameters
+- Writes run artifacts under outputs/runs/<project>_<timestamp>/
+- Writes outputs/runs/_latest_run.json pointer for downstream evaluation
 """
 
 from __future__ import annotations
@@ -17,78 +18,60 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
-# Resolve project root robustly (scripts/ -> repo root)
+
+# Resolve repo root: <repo>/scripts/01_train.py -> parents[1] == <repo>
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 def _parse_image_size(s: str) -> Tuple[int, int]:
-    """
-    Parse image size from:
-      - "224,224"
-      - "224x224"
-      - "224 224"
-    """
-    s = s.lower().replace("x", ",").replace(" ", ",")
-    parts = [p for p in s.split(",") if p.strip() != ""]
+    s = s.lower().strip().replace("x", ",").replace(" ", ",")
+    parts = [p for p in s.split(",") if p != ""]
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError(f"Invalid --image-size '{s}'. Use e.g. 224,224 or 224x224.")
+        raise argparse.ArgumentTypeError("Use --image-size like 224,224 or 224x224.")
     try:
         return int(parts[0]), int(parts[1])
     except ValueError as e:
-        raise argparse.ArgumentTypeError(f"Invalid --image-size '{s}'. Must be two integers.") from e
+        raise argparse.ArgumentTypeError("Image size must be two integers.") from e
 
 
 def main() -> None:
     from src.config import Config, seed_everything, ensure_dirs
     from src.utils import env_report, save_json
-    from src.data import build_datasets, build_loaders
-    from src.models import build_model, freeze_backbone, get_head_prefixes
+    from src.data import build_datasets, build_loaders, label_counts
+    from src.models import build_model, freeze_backbone, get_head_prefixes, get_gradcam_target_layer
     from src.train import run_training
 
-    parser = argparse.ArgumentParser(description="Train a 2D classification model (medimg_baseline_cls).")
-    parser.add_argument(
-        "--data-root",
-        type=str,
-        required=True,
-        help="Dataset root directory containing class subfolders (e.g., NORMAL/, PNEUMONIA/).",
-    )
-    parser.add_argument("--project-name", type=str, default="medimg_baseline_cls", help="Project name for run folder naming.")
-    parser.add_argument("--output-root", type=str, default="outputs", help="Root folder for outputs (runs, artifacts).")
+    parser = argparse.ArgumentParser(description="Train a 2D CXR classifier (medimg_baseline_cls).")
+    parser.add_argument("--data-root", type=str, required=True, help="Dataset root with class subfolders (NORMAL/, PNEUMONIA/).")
 
-    # Model + training
-    parser.add_argument("--arch", type=str, default="resnet18", help="Backbone architecture (e.g., resnet18, densenet121).")
-    parser.add_argument("--image-size", type=_parse_image_size, default=(224, 224), help="Image size, e.g. 224,224.")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size.")
-    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (start 0 on Windows; increase when stable).")
-    parser.add_argument("--pin-memory", action="store_true", help="Enable DataLoader pin_memory.")
-    parser.add_argument("--no-pin-memory", dest="pin_memory", action="store_false", help="Disable DataLoader pin_memory.")
-    parser.set_defaults(pin_memory=True)
+    parser.add_argument("--project-name", type=str, default="medimg_baseline_cls", help="Project name used for run folder naming.")
+    parser.add_argument("--output-root", type=str, default="outputs", help="Output root (contains runs/).")
 
-    parser.add_argument("--max-epochs", type=int, default=10, help="Total epochs.")
-    parser.add_argument("--head-epochs", type=int, default=2, help="Head-only epochs before fine-tuning.")
-    parser.add_argument("--lr-head", type=float, default=3e-3, help="Learning rate for head-only stage.")
-    parser.add_argument("--lr-finetune", type=float, default=1e-3, help="Learning rate for fine-tuning stage.")
-    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
+    parser.add_argument("--arch", type=str, default="resnet18", help="Backbone architecture (must match your build_model support).")
+    parser.add_argument("--image-size", type=_parse_image_size, default=(224, 224), help="Image size, e.g., 224,224.")
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--pin-memory", action="store_true", default=True)
+    parser.add_argument("--no-pin-memory", dest="pin_memory", action="store_false")
 
-    # Validation balancing
-    parser.add_argument("--rebuild-balanced-val", action="store_true", help="Rebuild balanced validation set.")
-    parser.add_argument("--no-rebuild-balanced-val", dest="rebuild_balanced_val", action="store_false", help="Do not rebuild balanced validation set.")
-    parser.set_defaults(rebuild_balanced_val=True)
+    parser.add_argument("--max-epochs", type=int, default=10)
+    parser.add_argument("--head-epochs", type=int, default=2)
+    parser.add_argument("--lr-head", type=float, default=3e-3)
+    parser.add_argument("--lr-finetune", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
-    parser.add_argument("--val-n-per-class", type=int, default=200, help="Number of items per class for balanced val/test sampling.")
-    parser.add_argument("--use-weighted-sampler", action="store_true", help="Use weighted sampler for training.")
-    parser.add_argument("--no-weighted-sampler", dest="use_weighted_sampler", action="store_false", help="Disable weighted sampler.")
-    parser.set_defaults(use_weighted_sampler=True)
+    parser.add_argument("--rebuild-balanced-val", action="store_true", default=True)
+    parser.add_argument("--no-rebuild-balanced-val", dest="rebuild_balanced_val", action="store_false")
+    parser.add_argument("--val-n-per-class", type=int, default=200)
 
-    # Repro + device
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--deterministic", action="store_true", help="Enable deterministic behavior (may reduce speed).")
-    parser.add_argument("--no-deterministic", dest="deterministic", action="store_false", help="Disable deterministic behavior.")
-    parser.set_defaults(deterministic=False)
+    parser.add_argument("--use-weighted-sampler", action="store_true", default=True)
+    parser.add_argument("--no-weighted-sampler", dest="use_weighted_sampler", action="store_false")
 
-    parser.add_argument("--device", type=str, default=None, help='Override device (e.g., "cuda" or "cpu"). Default uses Config default.')
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--deterministic", action="store_true", default=False)
+    parser.add_argument("--device", type=str, default=None, help='Override device (e.g., "cuda" or "cpu").')
 
     args = parser.parse_args()
 
@@ -116,30 +99,36 @@ def main() -> None:
         deterministic=args.deterministic,
     )
 
-    # Optional device override
     if args.device is not None:
         cfg.device = args.device
 
+    print("Project root:", ROOT)
     seed_everything(cfg.seed, cfg.deterministic)
     ensure_dirs(cfg)
 
-    print("Project root:", ROOT)
     print("Config:", cfg)
     print("Environment:", env_report())
 
     # Data
-    datasets = build_datasets(
+    ds = build_datasets(
         root_dir=cfg.data_root,
         class_names=cfg.class_names,
         image_size=cfg.image_size,
         rebuild_balanced_val=cfg.rebuild_balanced_val,
         val_n_per_class=cfg.val_n_per_class,
+        seed=cfg.seed,
     )
 
+    print("Counts:")
+    print("train:", label_counts(ds["train_items"], len(cfg.class_names)))
+    print("val  :", label_counts(ds["val_items"], len(cfg.class_names)))
+    print("test :", label_counts(ds["test_items"], len(cfg.class_names)))
+
     loaders = build_loaders(
-        train_ds=datasets["train_ds"],
-        val_ds=datasets["val_ds"],
-        test_ds=datasets["test_ds"],
+        train_ds=ds["train_ds"],
+        val_ds=ds["val_ds"],
+        test_ds=ds["test_ds"],
+        train_items=ds["train_items"],  # IMPORTANT: required for weighted sampler
         class_names=cfg.class_names,
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
@@ -147,16 +136,27 @@ def main() -> None:
         use_weighted_sampler=cfg.use_weighted_sampler,
     )
 
+    # Sanity batch
+    b = next(iter(loaders["train_loader"]))
+    print("Batch image shape:", getattr(b["image"], "shape", None))
+    try:
+        import numpy as np
+        labs = b["label"].detach().cpu().numpy()
+        print("Batch label counts:", {int(k): int((labs == k).sum()) for k in np.unique(labs)})
+    except Exception:
+        pass
+
     # Model
-    model = build_model(
-        arch=args.arch,
-        num_classes=len(cfg.class_names),
-        pretrained=True,
-        device=cfg.device,
-    )
+    arch = args.arch
+    model = build_model(arch=arch, num_classes=len(cfg.class_names), pretrained=True, device=cfg.device)
 
     # Freeze backbone for head-only stage
-    freeze_backbone(model, head_prefixes=get_head_prefixes(args.arch))
+    freeze_backbone(model, head_prefixes=get_head_prefixes(arch))
+    print("Trainable tensors:", sum(p.requires_grad for p in model.parameters()), "/", len(list(model.parameters())))
+
+    # (Optional) Grad-CAM target layer sanity
+    target_layer = get_gradcam_target_layer(model, arch)
+    print("Grad-CAM target layer:", target_layer)
 
     # Train
     result = run_training(
@@ -165,29 +165,20 @@ def main() -> None:
         train_loader=loaders["train_loader"],
         val_loader=loaders["val_loader"],
         test_loader=loaders["test_loader"],
-        arch=args.arch,
-    ) if "arch" in run_training.__code__.co_varnames else run_training(
-        cfg=cfg,
-        model=model,
-        train_loader=loaders["train_loader"],
-        val_loader=loaders["val_loader"],
-        test_loader=loaders["test_loader"],
     )
 
-    run_dir = Path(result["run_dir"]).resolve()
-    print("Run saved to:", run_dir)
-    print("Best checkpoint:", result.get("best_ckpt_path"))
-    print("VAL summary:", result.get("val_summary"))
-    print("TEST summary:", result.get("test_summary"))
+    print("Run saved to:", result["run_dir"])
+    print("Best checkpoint:", result["best_ckpt_path"])
+    print("VAL summary:", result["val_summary"])
+    print("TEST summary:", result["test_summary"])
 
-    # Save environment report into the run directory for reproducibility
-    save_json(env_report(), str(run_dir / "env_report.json"))
+    # Save env report into run directory
+    save_json(env_report(), str(Path(result["run_dir"]) / "env_report.json"))
 
     # Save a pointer to the latest run for downstream scripts/notebooks
-    runs_root = Path(cfg.output_root) / "runs"
-    latest_path = runs_root / "_latest_run.json"
+    latest_path = Path(cfg.output_root) / "runs" / "_latest_run.json"
     save_json(
-        {"run_dir": str(run_dir), "best_ckpt_path": result.get("best_ckpt_path")},
+        {"run_dir": result["run_dir"], "best_ckpt_path": result["best_ckpt_path"]},
         str(latest_path),
     )
     print("Wrote latest run pointer to:", latest_path)
