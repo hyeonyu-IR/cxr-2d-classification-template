@@ -1,4 +1,4 @@
-# 2D Classification: Chest X-ray, Normal vs. Pneumonia
+# 2D Classification: Chest X-ray - Normal vs. Pneumonia
 
 A reproducible, modular baseline framework for **2D medical image classification** using PyTorch and MONAI, with built-in support for:
 
