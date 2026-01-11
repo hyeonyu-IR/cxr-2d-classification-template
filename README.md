@@ -66,14 +66,14 @@ Images may be grayscale or RGB.
 Grayscale images are automatically converted to **3-channel** format.
 
 ## Environment setup (example)
-
+```
 conda create -n medimg python=3.10
 conda activate medimg
 
 pip install torch torchvision torchaudio
 pip install monai
 pip install numpy pandas scikit-learn matplotlib tqdm pillow
-
+```
 
 GPU (CUDA) is automatically detected if available.
 
