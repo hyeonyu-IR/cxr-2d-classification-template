@@ -1,4 +1,4 @@
-# medimg_baseline_cls
+# 2D Classification: Chest X-ray - Normal vs. Pneumonia
 
 A reproducible, modular baseline framework for **2D medical image classification** using PyTorch and MONAI, with built-in support for:
 
@@ -10,7 +10,10 @@ A reproducible, modular baseline framework for **2D medical image classification
 
 This repository was developed as a clean research template and can be reused for other radiology classification tasks (CXR, radiographs, pathology slides, etc.).
 
+---
+
 ## Project structure
+
 ```
 medimg_baseline_cls/
 ├── README.md
@@ -28,24 +31,20 @@ medimg_baseline_cls/
 │ ├── 01_train.ipynb # Thin training driver
 │ └── 02_eval_gradcam.ipynb # Evaluation + Grad-CAM driver
 │
-└── outputs/
-└── runs/
-└── <project>_<timestamp>/
-├── best.pt
-├── history.csv
-├── config.json
-├── env_report.json
-├── val_summary.json
-├── test_summary.json
-├── eval_summary.json
-└── gradcam/
-├── FP/
-└── FN/
+├── scripts/
+│ ├── 01_train.py
+│ └── 02_eval_gradcam.py
+|
+├── outputs/
+│ ├── runs/
+  └──---- run_id/
 ```
+
 
 ## Dataset assumptions
 
 This project currently assumes the **Kaggle Chest X-ray (Pneumonia)** directory structure:
+
 ```
 chest_xray/
 ├── train/
@@ -56,11 +55,11 @@ chest_xray/
 │ └── PNEUMONIA/
 └── val/ # optional; can be rebuilt from train
 ```
+
 Images may be grayscale or RGB.  
 Grayscale images are automatically converted to **3-channel** format.
 
 ## Environment setup (example)
-
 ```
 conda create -n medimg python=3.10
 conda activate medimg
@@ -105,8 +104,8 @@ This notebook:
 - identifies hard false positives / false negatives,
 - generates and saves Grad-CAM visual explanations.
 
-Grad-CAM outputs are saved to:
 ```
+Grad-CAM outputs are saved to:
 outputs/runs/<run_id>/gradcam/
 ├── FP/
 └── FN/
@@ -166,3 +165,39 @@ Contact / notes
 This repository was developed as part of an academic exploration of
 AI workflows in medical imaging, with emphasis on rigor, interpretability,
 and reproducibility.
+
+---
+### Use example for scripts/01_train.py
+#### Train: required data-root. type below in the root directory of the project
+```
+conda activate medimg
+python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
+```
+- optional overrides:
+  ```
+  python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
+  ```
+
+This will also write:
+- outputs/runs/<timestamped_run>/...
+- outputs/runs/_latest_run.json (so eval can use --run latest)
+
+---
+### Use example for scripts/02_eval_gradcam.py
+#### Evaluate + Grad-CAM (latest run)
+```
+python scripts/02_eval_gradcam.py --run latest
+```
+- For specific run 'Evaluate + Grad-CAM'
+```
+python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
+```
+- optional example:
+  ```
+  python scripts/01_train.py --data-root "C:\...\chest_xray" --arch resnet18 --batch-size 32 --max-epochs 10
+  ```
+Outputs:
+- <run_dir>/gradcam/FP/
+- <run_dir>/gradcam/FN/
+- <run_dir>/eval_summary.json (enabled by default)
+
