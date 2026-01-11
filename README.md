@@ -37,7 +37,7 @@ medimg_baseline_cls/
 |
 ├── outputs/
 │ ├── runs/
-│ |   └── run_id/
+  └──---- run_id/
 ```
 
 
