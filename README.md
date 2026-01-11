@@ -173,25 +173,26 @@ AI workflows in medical imaging, with emphasis on rigor, interpretability,
 and reproducibility.
 
 ## Use example for scripts/01_train.py
-- Train: required data-root. type below in the root directory of the project
-- ```
-    conda activate medimg
-    python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
+### Train
+Train: required data-root. type below in the root directory of the project
+```
+conda activate medimg
+python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
+```
+- optional overrides:
   ```
-    - optional overrides:
-     ```
-        python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
-     ```
-- Evaluate + Grad-CAM (latest run)
-    ```
-    python scripts/02_eval_gradcam.py --run latest
-    ```
+  python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
+  ```
+### Evaluate + Grad-CAM (latest run)
+```
+python scripts/02_eval_gradcam.py --run latest
+```
 - For specific run 'Evaluate + Grad-CAM'
-- ```
-    python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
+```
+python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
+```
+- optional overrides:
   ```
-    - optional overrides:
-    ```
-        python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
-    ```
+  python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
+  ```
 
