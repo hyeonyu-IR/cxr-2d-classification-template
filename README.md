@@ -160,3 +160,55 @@ Common next steps:
 - integrate experiment tracking (e.g., MLflow).
 The modular structure is designed to support these changes cleanly.
 
+-------------------------------------------------------------------
+
+## Run directory resolution (recommended)
+
+Training writes a lightweight pointer file:
+
+- `outputs/runs/_latest_run.json`
+
+This file stores the most recent run directory (run-state metadata). Evaluation workflows should:
+
+1) Read `_latest_run.json` to resolve the most recent run directory  
+2) Load `config.json` from that run directory to construct `Config`
+
+This avoids hard-coding run folder names (e.g., `medimg_baseline_cls_YYYYMMDD_HHMMSS`) and keeps `Config` schema-aligned with `config.json`.
+
+Example (evaluation):
+
+```python
+from pathlib import Path
+from src.utils import load_json
+from src.config import Config
+
+RUNS_ROOT = Path("outputs") / "runs"
+latest_meta = load_json(str(RUNS_ROOT / "_latest_run.json"))
+
+run_dir = Path(latest_meta["run_dir"])
+if not run_dir.is_absolute():
+    run_dir = (Path.cwd() / run_dir).resolve()
+
+cfg_dict = load_json(str(run_dir / "config.json"))
+cfg = Config(**cfg_dict)
+cfg.run_dir = str(run_dir)  # optional convenience
+```
+
+```
+
+## B) Add: “Script-friendly evaluation” section
+
+If you are adding a Python script entrypoint (recommended), include:
+
+```markdown
+## Script-friendly evaluation (Grad-CAM)
+
+You can run Grad-CAM evaluation in a non-notebook workflow:
+
+```bash
+python scripts/02_eval_gradcam.py --run latest
+```
+
+
+
+
