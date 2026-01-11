@@ -183,6 +183,9 @@ python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medim
   ```
   python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
   ```
+This will also write:
+- outputs/runs/<timestamped_run>/...
+- outputs/runs/_latest_run.json (so eval can use --run latest)
 
 ### Use example for scripts/02_eval_gradcam.py
 #### Evaluate + Grad-CAM (latest run)
@@ -195,6 +198,10 @@ python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_2026011
 ```
 - optional overrides:
   ```
-  python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
+  python scripts/02_eval_gradcam.py --run latest --arch resnet18 --topk 10 --target-sens 0.95
   ```
+Outputs:
+- <run_dir>/gradcam/FP/
+- <run_dir>/gradcam/FN/
+- <run_dir>/eval_summary.json (enabled by default)
 
