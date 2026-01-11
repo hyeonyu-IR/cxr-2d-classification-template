@@ -183,7 +183,7 @@ python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medim
   ```
   python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
   ```
----
+
 ### Use example for scripts/02_eval_gradcam.py
 #### Evaluate + Grad-CAM (latest run)
 ```
