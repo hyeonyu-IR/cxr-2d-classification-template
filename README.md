@@ -172,9 +172,8 @@ This repository was developed as part of an academic exploration of
 AI workflows in medical imaging, with emphasis on rigor, interpretability,
 and reproducibility.
 
-## Use example for scripts/01_train.py
-### Train
-Train: required data-root. type below in the root directory of the project
+### Use example for scripts/01_train.py
+#### Train: required data-root. type below in the root directory of the project
 ```
 conda activate medimg
 python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
@@ -183,7 +182,8 @@ python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medim
   ```
   python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
   ```
-### Evaluate + Grad-CAM (latest run)
+### Use example for scripts/02_eval_gradcam.py
+#### Evaluate + Grad-CAM (latest run)
 ```
 python scripts/02_eval_gradcam.py --run latest
 ```
