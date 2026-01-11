@@ -172,6 +172,7 @@ This repository was developed as part of an academic exploration of
 AI workflows in medical imaging, with emphasis on rigor, interpretability,
 and reproducibility.
 
+---
 ### Use example for scripts/01_train.py
 #### Train: required data-root. type below in the root directory of the project
 ```
@@ -182,6 +183,7 @@ python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medim
   ```
   python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
   ```
+---
 ### Use example for scripts/02_eval_gradcam.py
 #### Evaluate + Grad-CAM (latest run)
 ```
