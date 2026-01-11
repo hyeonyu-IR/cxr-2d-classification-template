@@ -190,9 +190,9 @@ python scripts/02_eval_gradcam.py --run latest
 ```
 python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
 ```
-- optional overrides:
+- optional example:
   ```
-  python scripts/02_eval_gradcam.py --run latest --arch resnet18 --topk 10 --target-sens 0.95
+  python scripts/01_train.py --data-root "C:\...\chest_xray" --arch resnet18 --batch-size 32 --max-epochs 10
   ```
 Outputs:
 - <run_dir>/gradcam/FP/
