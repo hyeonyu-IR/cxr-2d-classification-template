@@ -11,9 +11,10 @@ A reproducible, modular baseline framework for **2D medical image classification
 This repository was developed as a clean research template and can be reused for other radiology classification tasks (CXR, radiographs, pathology slides, etc.).
 
 ---
-```
+
 ## Project structure
 
+```
 medimg_baseline_cls/
 ├── README.md
 ├── src/
@@ -43,11 +44,14 @@ medimg_baseline_cls/
 └── gradcam/
 ├── FP/
 └── FN/
+```
+
 
 ## Dataset assumptions
 
 This project currently assumes the **Kaggle Chest X-ray (Pneumonia)** directory structure:
 
+```
 chest_xray/
 ├── train/
 │ ├── NORMAL/
@@ -56,23 +60,20 @@ chest_xray/
 │ ├── NORMAL/
 │ └── PNEUMONIA/
 └── val/ # optional; can be rebuilt from train
-
 ```
+
 Images may be grayscale or RGB.  
 Grayscale images are automatically converted to **3-channel** format.
 
----
-
 ## Environment setup (example)
 
-```bash
 conda create -n medimg python=3.10
 conda activate medimg
 
 pip install torch torchvision torchaudio
 pip install monai
 pip install numpy pandas scikit-learn matplotlib tqdm pillow
-```
+
 
 GPU (CUDA) is automatically detected if available.
 
@@ -108,12 +109,14 @@ This notebook:
 - reports TEST confusion matrices and metrics,
 - identifies hard false positives / false negatives,
 - generates and saves Grad-CAM visual explanations.
+
 ```
 Grad-CAM outputs are saved to:
 outputs/runs/<run_id>/gradcam/
 ├── FP/
 └── FN/
 ```
+
 Each image contains:
 - original image,
 - Grad-CAM heatmap,
@@ -160,55 +163,25 @@ Common next steps:
 - integrate experiment tracking (e.g., MLflow).
 The modular structure is designed to support these changes cleanly.
 
--------------------------------------------------------------------
+License / usage
+This code is intended for research and educational use.
+Please validate thoroughly before any clinical or operational deployment.
 
-## Run directory resolution (recommended)
+Contact / notes
+This repository was developed as part of an academic exploration of
+AI workflows in medical imaging, with emphasis on rigor, interpretability,
+and reproducibility.
 
-Training writes a lightweight pointer file:
-
-- `outputs/runs/_latest_run.json`
-
-This file stores the most recent run directory (run-state metadata). Evaluation workflows should:
-
-1) Read `_latest_run.json` to resolve the most recent run directory  
-2) Load `config.json` from that run directory to construct `Config`
-
-This avoids hard-coding run folder names (e.g., `medimg_baseline_cls_YYYYMMDD_HHMMSS`) and keeps `Config` schema-aligned with `config.json`.
-
-Example (evaluation):
-
-```python
-from pathlib import Path
-from src.utils import load_json
-from src.config import Config
-
-RUNS_ROOT = Path("outputs") / "runs"
-latest_meta = load_json(str(RUNS_ROOT / "_latest_run.json"))
-
-run_dir = Path(latest_meta["run_dir"])
-if not run_dir.is_absolute():
-    run_dir = (Path.cwd() / run_dir).resolve()
-
-cfg_dict = load_json(str(run_dir / "config.json"))
-cfg = Config(**cfg_dict)
-cfg.run_dir = str(run_dir)  # optional convenience
-```
-
-```
-
-## B) Add: “Script-friendly evaluation” section
-
-If you are adding a Python script entrypoint (recommended), include:
-
-```markdown
-## Script-friendly evaluation (Grad-CAM)
-
-You can run Grad-CAM evaluation in a non-notebook workflow:
-
-```bash
-python scripts/02_eval_gradcam.py --run latest
-```
-
-
-
+## Use example for scripts/01_train.py
+- Train: required data-root. type below in the root directory of the project
+    - conda activate medimg
+    - python scripts/01_train.py --data-root "C:\Users\hyeon\Documents\miniconda_medimg_env\data\chest_xray"
+    - optional overrides:
+        - python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
+- Evaluate + Grad-CAM (latest run)
+    - python scripts/02_eval_gradcam.py --run latest
+- For specific run 'Evaluate + Grad-CAM'
+    - python scripts/02_eval_gradcam.py --run outputs/runs/medimg_baseline_cls_20260110_155155
+    - optional overrides:
+        - python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
 
