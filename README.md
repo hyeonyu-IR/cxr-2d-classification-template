@@ -180,7 +180,7 @@ and reproducibility.
   ```
     - optional overrides:
      ```
-    python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
+        python scripts/01_train.py --data-root "..." --arch resnet18 --batch-size 32 --max-epochs 10 --head-epochs 2
      ```
 - Evaluate + Grad-CAM (latest run)
     ```
@@ -192,6 +192,6 @@ and reproducibility.
   ```
     - optional overrides:
     ```
-    python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
+        python scripts/02_eval_gradcam.py --run latest --arch resnet18 --n-fp 10 --n-fn 10 --out-subdir gradcam
     ```
 
