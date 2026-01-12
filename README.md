@@ -180,3 +180,8 @@ python scripts/02_eval_gradcam.py --help
 Detailed usage examples, threshold strategies, and output descriptions are
 documented in:
 - ```docs/USAGE.md```
+
+## Reporting
+- Post-hoc experiment reports (metrics, plots, and Grad-CAM summaries) can be
+generated using `scripts/03_make_report.py`.
+- See `docs/REPORTING.md` for details.
