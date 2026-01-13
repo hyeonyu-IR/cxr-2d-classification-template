@@ -20,3 +20,4 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ## [0.2.1] - 2026-01-10
 ### Changed
 - Grad-CAM evaluation uses latest-run pointer for automatic run selection.
+- Fixed: robust Grad-CAM image handling in manuscript document generator

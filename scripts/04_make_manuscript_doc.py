@@ -12,6 +12,8 @@ import pandas as pd
 from docx import Document
 from docx.shared import Inches
 from datetime import datetime
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def load_json(p: Path):
@@ -65,6 +67,85 @@ def add_images_from_folder(doc: Document, folder: Path, title: str):
         doc.add_page_break()
 
 
+def save_training_curves(history_csv: Path, out_dir: Path) -> list[Path]:
+    """
+    Create training curve PNG(s) from history.csv.
+    Matches this repo's history schema (epoch, stage, train_loss, train_acc_quick, val_loss, val_acc, val_ap, test_ap).
+    Returns a list of created PNG paths.
+    """
+    if not history_csv.exists():
+        return []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(history_csv)
+    df.columns = [c.strip() for c in df.columns]
+
+    x = df["epoch"] if "epoch" in df.columns else (np.arange(len(df)) + 1)
+
+    # Optional: mark the stage transition (head -> finetune) if stage column exists
+    stage_change_epoch = None
+    if "stage" in df.columns:
+        stages = df["stage"].astype(str).values
+        for i in range(1, len(stages)):
+            if stages[i] != stages[i - 1]:
+                stage_change_epoch = int(x.iloc[i]) if hasattr(x, "iloc") else int(x[i])
+                break
+
+    created: list[Path] = []
+
+    def _finalize_plot(ax, title: str, out_png: Path):
+        ax.set_xlabel("Epoch")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        # Add a vertical marker for stage change if detected
+        if stage_change_epoch is not None:
+            ax.axvline(stage_change_epoch, linestyle="--", linewidth=1)
+            ax.text(stage_change_epoch, ax.get_ylim()[1], " stage change", va="top")
+
+        plt.tight_layout()
+        plt.savefig(out_png, bbox_inches="tight")
+        plt.close()
+
+    # 1) Loss curve: train_loss vs val_loss
+    if "train_loss" in df.columns or "val_loss" in df.columns:
+        fig, ax = plt.subplots(figsize=(7.0, 4.0), dpi=200)
+        if "train_loss" in df.columns:
+            ax.plot(x, df["train_loss"].values, label="train_loss")
+        if "val_loss" in df.columns:
+            ax.plot(x, df["val_loss"].values, label="val_loss")
+        ax.set_ylabel("Loss")
+        out_png = out_dir / "training_curve_loss.png"
+        _finalize_plot(ax, "Training Curve: Loss", out_png)
+        created.append(out_png)
+
+    # 2) Accuracy curve: train_acc_quick vs val_acc
+    if "train_acc_quick" in df.columns or "val_acc" in df.columns:
+        fig, ax = plt.subplots(figsize=(7.0, 4.0), dpi=200)
+        if "train_acc_quick" in df.columns:
+            ax.plot(x, df["train_acc_quick"].values, label="train_acc_quick")
+        if "val_acc" in df.columns:
+            ax.plot(x, df["val_acc"].values, label="val_acc")
+        ax.set_ylabel("Accuracy")
+        out_png = out_dir / "training_curve_accuracy.png"
+        _finalize_plot(ax, "Training Curve: Accuracy", out_png)
+        created.append(out_png)
+
+    # 3) AP curve: val_ap and (optional) test_ap
+    if "val_ap" in df.columns or "test_ap" in df.columns:
+        fig, ax = plt.subplots(figsize=(7.0, 4.0), dpi=200)
+        if "val_ap" in df.columns:
+            ax.plot(x, df["val_ap"].values, label="val_ap")
+        if "test_ap" in df.columns:
+            ax.plot(x, df["test_ap"].values, label="test_ap")
+        ax.set_ylabel("Average Precision")
+        out_png = out_dir / "training_curve_ap.png"
+        _finalize_plot(ax, "Training Curve: Average Precision", out_png)
+        created.append(out_png)
+
+    return created
+
 
 def main():
     parser = argparse.ArgumentParser(description="Generate manuscript-ready Word document.")
@@ -96,13 +177,39 @@ def main():
         cfg = load_json(cfg_path)
         for k, v in cfg.items():
             doc.add_paragraph(f"{k}: {v}")
-
-    # History
+    
+    
+    # History + training curves
     hist_path = run_dir / "history.csv"
+    
     if hist_path.exists():
+        doc.add_heading("Training", level=1)
+    
+        fig_dir = run_dir / "report" / "figures"
+        curve_paths = save_training_curves(hist_path, fig_dir)
+    
+        if curve_paths:
+            doc.add_heading("Training Curves", level=2)
+            for p in curve_paths:
+                doc.add_paragraph(p.name)
+                doc.add_picture(str(p), width=Inches(6))
+            doc.add_paragraph("")
+        else:
+            doc.add_paragraph(
+                "Training curves could not be generated "
+                "(missing expected columns in history.csv)."
+            )
+    
+        # Training history table
         df = pd.read_csv(hist_path)
-        add_dataframe(doc, df, "Training History")
+        add_dataframe(doc, df, "Training History (per epoch)")
 
+
+    # Then include the table
+    df = pd.read_csv(hist_path)
+    add_dataframe(doc, df, "Training History (per epoch)")
+
+    
     # Evaluation summary
     eval_path = run_dir / "eval_summary.json"
     if eval_path.exists():
@@ -111,11 +218,13 @@ def main():
         for k, v in eval_summary.items():
             doc.add_paragraph(f"{k}: {v}")
 
+    
     # Error tables
     for err_csv in run_dir.glob("errors_*.csv"):
         df = pd.read_csv(err_csv)
         add_dataframe(doc, df, f"Errors: {err_csv.name}")
 
+    
     # Grad-CAM images
     add_images_from_folder(doc, run_dir / "gradcam" / "FP", "Grad-CAM: False Positives")
     add_images_from_folder(doc, run_dir / "gradcam" / "FN", "Grad-CAM: False Negatives")

@@ -185,3 +185,16 @@ documented in:
 - Post-hoc experiment reports (metrics, plots, and Grad-CAM summaries) can be
 generated using `scripts/03_make_report.py`.
 - See `docs/REPORTING.md` for details.
+
+---
+
+## Creating a document file (Word)
+```
+conda activate medimg
+pip install python-docx
+python scripts/04_make_manuscript_doc.py --run latest
+```
+### Output directory
+```
+outputs/runs/<run_id>/manuscript_report.docx
+```
